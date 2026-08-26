@@ -6,18 +6,28 @@ Página pública de status da iônica, com identidade visual própria e organiza
 
 - Next.js
 - Front-end consulta apenas `/api/status`
-- `/api/status` atua como proxy server-side para o endpoint público de componentes do Datadog
-- Os grupos, nomes, ordem e status vêm dinamicamente da fonte oficial
+- `/api/status` acessa a página pública do Datadog no backend
+- O HTML retornado é interpretado server-side para reconstruir grupos, serviços, ordem e status
 - Atualização automática a cada 60 segundos
 - Sem histórico de incidentes ou disponibilidade passada
 
-## Fonte de dados
+## Fonte de dados atual
 
-Endpoint consultado pelo servidor:
+Página consultada pelo servidor:
 
-`https://status-servicos.statuspage.datadoghq.com/api/v2/components.json`
+`https://status-servicos.statuspage.datadoghq.com/`
 
-O navegador não acessa o Datadog diretamente. Isso evita dependência de CORS no cliente e permite evoluir depois para a API autenticada oficial do Datadog sem alterar a UI.
+Nesta versão não usamos o endpoint `/api/v2/components.json`, pois ele está respondendo com HTTP 403.
+
+O navegador não acessa o Datadog diretamente. A leitura ocorre no backend e a interface consome apenas o JSON normalizado de `/api/status`.
+
+A estrutura HTML padrão do Statuspage expõe os grupos como componentes `is-group`, os serviços filhos em `child-components-container` e os estados atuais em `data-component-status`. O backend converte essa estrutura para o mesmo modelo de componentes esperado pela interface.
+
+## Importante
+
+Esta integração por leitura do HTML é uma solução temporária até termos acesso à API oficial. Como depende da estrutura da página pública, uma mudança futura no HTML do Statuspage pode exigir ajuste no parser.
+
+Quando a API oficial estiver liberada, será necessário alterar apenas `app/api/status/route.js`. A interface e a atualização automática não precisam mudar.
 
 ## Executar localmente
 
@@ -35,6 +45,20 @@ Acesse `http://localhost:3000`.
 3. Não são necessárias variáveis de ambiente nesta versão.
 4. Publique o projeto.
 
-## Evolução possível
+## Fluxo
 
-Caso o endpoint público do Datadog deixe de responder ou seja restringido, altere apenas `app/api/status/route.js` para usar a API oficial autenticada do Datadog. A camada visual não precisa mudar.
+```text
+Browser
+  ↓
+GET /api/status
+  ↓
+Next.js server-side
+  ↓
+GET https://status-servicos.statuspage.datadoghq.com/
+  ↓
+Parser HTML
+  ↓
+JSON normalizado com grupos + serviços + status
+  ↓
+Renderização da página iônica
+```
