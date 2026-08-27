@@ -83,7 +83,7 @@ export default function Home() {
     <main className="page-shell">
       <section className="hero">
         <div className="brand-row">
-          <div className="brand">iônica</div>
+          <img src="/logo.png" alt="iônica" className="brand-logo" />
           <div className="brand-tag">status</div>
         </div>
 
