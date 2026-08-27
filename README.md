@@ -6,33 +6,50 @@ Página pública de status da iônica, com identidade visual própria e organiza
 
 - Next.js
 - Front-end consulta apenas `/api/status`
-- `/api/status` acessa a página pública do Datadog no backend
-- O HTML retornado é interpretado server-side para reconstruir grupos, serviços, ordem e status
+- `/api/status` acessa o `config.json` da Status Page no backend
+- A resposta é normalizada server-side para o modelo usado pela interface
 - Atualização automática a cada 60 segundos
 - Sem histórico de incidentes ou disponibilidade passada
 
+## Configuração
+
+Copie o arquivo de exemplo:
+
+```bash
+cp .env.example .env.local
+```
+
+Variável obrigatória:
+
+```env
+DATADOG_STATUS_PAGE_URL=https://status-servicos.statuspage.datadoghq.com/config.json
+```
+
+A URL não fica hardcoded no código.
+
 ## Fonte de dados atual
 
-Página consultada pelo servidor:
+O backend executa uma requisição equivalente a:
 
-`https://status-servicos.statuspage.datadoghq.com/`
+```bash
+curl --location 'https://status-servicos.statuspage.datadoghq.com/config.json'
+```
 
-Nesta versão não usamos o endpoint `/api/v2/components.json`, pois ele está respondendo com HTTP 403.
+O navegador não acessa o Datadog diretamente. A interface consome apenas o endpoint interno:
 
-O navegador não acessa o Datadog diretamente. A leitura ocorre no backend e a interface consome apenas o JSON normalizado de `/api/status`.
+```text
+GET /api/status
+```
 
-A estrutura HTML padrão do Statuspage expõe os grupos como componentes `is-group`, os serviços filhos em `child-components-container` e os estados atuais em `data-component-status`. O backend converte essa estrutura para o mesmo modelo de componentes esperado pela interface.
+O backend lê `DATADOG_STATUS_PAGE_URL`, consulta o JSON e normaliza grupos, serviços, ordem e status para a estrutura usada pela página.
 
-## Importante
-
-Esta integração por leitura do HTML é uma solução temporária até termos acesso à API oficial. Como depende da estrutura da página pública, uma mudança futura no HTML do Statuspage pode exigir ajuste no parser.
-
-Quando a API oficial estiver liberada, será necessário alterar apenas `app/api/status/route.js`. A interface e a atualização automática não precisam mudar.
+Essa estratégia substitui temporariamente o endpoint `/api/v2/components.json`, que estava retornando HTTP 403.
 
 ## Executar localmente
 
 ```bash
 npm install
+cp .env.example .env.local
 npm run dev
 ```
 
@@ -42,8 +59,15 @@ Acesse `http://localhost:3000`.
 
 1. Importe o repositório `Mia-Educacao/statuspage` na Vercel.
 2. Framework preset: Next.js.
-3. Não são necessárias variáveis de ambiente nesta versão.
-4. Publique o projeto.
+3. Configure a variável `DATADOG_STATUS_PAGE_URL` em **Settings > Environment Variables**.
+4. Valor atual:
+
+```text
+https://status-servicos.statuspage.datadoghq.com/config.json
+```
+
+5. Habilite a variável nos ambientes desejados, principalmente Production e Preview.
+6. Faça o redeploy.
 
 ## Fluxo
 
@@ -54,11 +78,17 @@ GET /api/status
   ↓
 Next.js server-side
   ↓
-GET https://status-servicos.statuspage.datadoghq.com/
+DATADOG_STATUS_PAGE_URL
   ↓
-Parser HTML
+GET .../config.json
   ↓
-JSON normalizado com grupos + serviços + status
+Normalização do JSON
+  ↓
+JSON com grupos + serviços + status
   ↓
 Renderização da página iônica
 ```
+
+## Observação
+
+O normalizador aceita algumas variações comuns de estrutura (`components`, `groups`, `component_groups` e equivalentes). Caso o schema efetivo do `config.json` seja diferente, o endpoint retorna um erro explícito em vez de assumir dados inexistentes.
