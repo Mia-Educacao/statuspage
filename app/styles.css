@@ -36,8 +36,20 @@ button { font: inherit; }
     radial-gradient(circle at 78% 24%, rgba(255,255,255,.17), transparent 18%),
     linear-gradient(120deg, #572183 0%, #92206f 48%, #e1653c 100%);
 }
-.brand-row { display: flex; align-items: baseline; gap: 12px; margin-bottom: 34px; }
-.brand { font-size: 34px; font-weight: 700; letter-spacing: -1.8px; }
+.brand-row {
+  max-width: 1180px;
+  margin: 0 auto 34px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.brand-logo {
+  width: 180px;
+  height: auto;
+  display: block;
+  object-fit: contain;
+}
+.brand-placeholder { font-size: 34px; font-weight: 700; letter-spacing: -1.8px; }
 .brand-tag { font-size: 17px; font-weight: 500; opacity: .82; }
 
 .hero-status {
@@ -116,6 +128,7 @@ button { font: inherit; }
   margin-bottom: 22px;
 }
 .section-heading h2 { margin: 5px 0 0; font-size: 29px; letter-spacing: -1px; }
+.section-description { margin: 8px 0 0; color: var(--muted); font-size: 14px; }
 .source-label { color: var(--muted); font-size: 12px; }
 
 .service-group {
@@ -127,15 +140,17 @@ button { font: inherit; }
   box-shadow: 0 8px 24px rgba(69,49,84,.05);
 }
 .group-header {
-  min-height: 68px;
+  min-height: 76px;
   padding: 18px 22px;
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 18px;
   border-bottom: 1px solid var(--line);
+  background: linear-gradient(90deg, rgba(93,42,138,.035), rgba(194,37,120,.025));
 }
 .group-header h3 { margin: 0; font-size: 17px; }
+.component-count { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; font-weight: 500; }
 .service-list { padding: 0 22px; }
 .service-row {
   min-height: 58px;
@@ -181,6 +196,7 @@ button { font: inherit; }
 @media (max-width: 760px) {
   .hero { padding: 28px 20px 24px; }
   .brand-row { margin-bottom: 24px; }
+  .brand-logo { width: 180px; height: auto; }
   .hero-status { padding: 24px 22px; display: block; border-radius: 20px; }
   .hero-copy h1 { letter-spacing: -1.3px; }
   .live-pill { margin-top: 22px; }
