@@ -1,78 +1,110 @@
-import * as cheerio from 'cheerio';
+const DATADOG_STATUS_PAGE_URL = process.env.DATADOG_STATUS_PAGE_URL;
 
-const DATADOG_STATUS_PAGE_URL = 'https://status-servicos.statuspage.datadoghq.com/';
+function normalizeStatus(status) {
+  if (!status) return 'operational';
 
-function cleanText(value) {
-  return value.replace(/\s+/g, ' ').trim();
+  const value = String(status).toLowerCase();
+  const aliases = {
+    operational: 'operational',
+    ok: 'operational',
+    up: 'operational',
+    degraded: 'degraded_performance',
+    degraded_performance: 'degraded_performance',
+    partial_outage: 'partial_outage',
+    major_outage: 'major_outage',
+    outage: 'major_outage',
+    under_maintenance: 'under_maintenance',
+    maintenance: 'under_maintenance',
+  };
+
+  return aliases[value] ?? value;
 }
 
-function parseComponent($, element, position, groupId = null, isGroup = false) {
-  const node = $(element);
-  const id = node.attr('data-component-id');
-  const status = node.attr('data-component-status') || 'operational';
-  const name = cleanText(node.find('.name').first().text());
+function toComponent(item, position, groupId = null, isGroup = false) {
+  if (!item || typeof item !== 'object') return null;
 
-  if (!id || !name) return null;
+  const id = item.id ?? item.component_id ?? item.componentId ?? item.slug ?? `component-${position}`;
+  const name = item.name ?? item.display_name ?? item.displayName ?? item.title;
+  if (!name) return null;
 
   return {
-    id,
-    name,
-    status,
-    position,
+    id: String(id),
+    name: String(name),
+    status: normalizeStatus(item.status ?? item.state ?? item.component_status ?? item.componentStatus),
+    position: Number(item.position ?? item.order ?? position),
     group: isGroup,
     group_id: groupId,
   };
 }
 
-function parseStatusPageHtml(html) {
-  const $ = cheerio.load(html);
+function normalizeConfig(payload) {
   const components = [];
   let position = 0;
 
-  $('.components-container > .component-container').each((_, container) => {
-    const wrapper = $(container);
-    const isGroup = wrapper.hasClass('is-group');
+  const directComponents =
+    payload?.components ??
+    payload?.data?.components ??
+    payload?.page?.components ??
+    payload?.status_page?.components ??
+    [];
 
-    if (isGroup) {
-      const groupElement = wrapper.children('.component-inner-container').first();
-      const group = parseComponent($, groupElement, position++, null, true);
-      if (!group) return;
+  const groups =
+    payload?.groups ??
+    payload?.component_groups ??
+    payload?.componentGroups ??
+    payload?.data?.groups ??
+    payload?.data?.component_groups ??
+    [];
 
+  if (Array.isArray(groups)) {
+    for (const rawGroup of groups) {
+      const group = toComponent(rawGroup, position++, null, true);
+      if (!group) continue;
       components.push(group);
 
-      wrapper
-        .children('.child-components-container')
-        .children('.component-inner-container')
-        .each((__, child) => {
-          const component = parseComponent($, child, position++, group.id, false);
-          if (component) components.push(component);
-        });
-
-      return;
+      const children = rawGroup.components ?? rawGroup.children ?? rawGroup.items ?? [];
+      if (Array.isArray(children)) {
+        for (const rawChild of children) {
+          const child = toComponent(rawChild, position++, group.id, false);
+          if (child) components.push(child);
+        }
+      }
     }
+  }
 
-    const standaloneElement = wrapper.children('.component-inner-container').first();
-    const component = parseComponent($, standaloneElement, position++, null, false);
-    if (component) components.push(component);
-  });
+  if (Array.isArray(directComponents)) {
+    for (const rawComponent of directComponents) {
+      const isGroup = rawComponent?.group === true || rawComponent?.is_group === true || rawComponent?.isGroup === true;
+      const groupId = rawComponent?.group_id ?? rawComponent?.groupId ?? rawComponent?.parent_id ?? rawComponent?.parentId ?? null;
+      const component = toComponent(rawComponent, position++, groupId ? String(groupId) : null, isGroup);
+      if (component && !components.some((existing) => existing.id === component.id)) {
+        components.push(component);
+      }
+    }
+  }
 
-  return components;
+  return components.sort((a, b) => a.position - b.position);
 }
 
 export async function GET() {
+  if (!DATADOG_STATUS_PAGE_URL) {
+    return Response.json(
+      {
+        ok: false,
+        error: 'Variável de ambiente DATADOG_STATUS_PAGE_URL não configurada.',
+      },
+      { status: 500 },
+    );
+  }
+
   try {
     const response = await fetch(DATADOG_STATUS_PAGE_URL, {
       cache: 'no-store',
       redirect: 'follow',
       headers: {
-        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-        'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+        Accept: 'application/json',
         'Cache-Control': 'no-cache',
         Pragma: 'no-cache',
-        'Sec-Fetch-Dest': 'document',
-        'Sec-Fetch-Mode': 'navigate',
-        'Sec-Fetch-Site': 'none',
-        'Upgrade-Insecure-Requests': '1',
         'User-Agent':
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36',
       },
@@ -82,20 +114,21 @@ export async function GET() {
       return Response.json(
         {
           ok: false,
-          error: `Página pública do Datadog respondeu com status ${response.status}`,
+          error: `Datadog respondeu com status ${response.status}`,
         },
         { status: 502 },
       );
     }
 
-    const html = await response.text();
-    const components = parseStatusPageHtml(html);
+    const payload = await response.json();
+    const components = normalizeConfig(payload);
 
     if (!components.length) {
       return Response.json(
         {
           ok: false,
-          error: 'A página pública respondeu, mas nenhum serviço pôde ser identificado no HTML.',
+          error: 'O config.json respondeu, mas não foi possível identificar grupos ou serviços no payload.',
+          source: 'datadog-config-json',
         },
         { status: 502 },
       );
@@ -104,7 +137,7 @@ export async function GET() {
     return Response.json(
       {
         ok: true,
-        source: 'public-status-page-html',
+        source: 'datadog-config-json',
         sourceUrl: DATADOG_STATUS_PAGE_URL,
         components,
         fetchedAt: new Date().toISOString(),
@@ -119,10 +152,7 @@ export async function GET() {
     return Response.json(
       {
         ok: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : 'Erro inesperado ao consultar a página pública do Datadog',
+        error: error instanceof Error ? error.message : 'Erro inesperado ao consultar o config.json do Datadog',
       },
       { status: 502 },
     );
