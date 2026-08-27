@@ -1,91 +1,5 @@
 const DATADOG_STATUS_PAGE_URL = process.env.DATADOG_STATUS_PAGE_URL;
 
-function normalizeStatus(status) {
-  if (!status) return 'operational';
-
-  const value = String(status).toLowerCase();
-  const aliases = {
-    operational: 'operational',
-    ok: 'operational',
-    up: 'operational',
-    degraded: 'degraded_performance',
-    degraded_performance: 'degraded_performance',
-    partial_outage: 'partial_outage',
-    major_outage: 'major_outage',
-    outage: 'major_outage',
-    under_maintenance: 'under_maintenance',
-    maintenance: 'under_maintenance',
-  };
-
-  return aliases[value] ?? value;
-}
-
-function toComponent(item, position, groupId = null, isGroup = false) {
-  if (!item || typeof item !== 'object') return null;
-
-  const id = item.id ?? item.component_id ?? item.componentId ?? item.slug ?? `component-${position}`;
-  const name = item.name ?? item.display_name ?? item.displayName ?? item.title;
-  if (!name) return null;
-
-  return {
-    id: String(id),
-    name: String(name),
-    status: normalizeStatus(item.status ?? item.state ?? item.component_status ?? item.componentStatus),
-    position: Number(item.position ?? item.order ?? position),
-    group: isGroup,
-    group_id: groupId,
-  };
-}
-
-function normalizeConfig(payload) {
-  const components = [];
-  let position = 0;
-
-  const directComponents =
-    payload?.components ??
-    payload?.data?.components ??
-    payload?.page?.components ??
-    payload?.status_page?.components ??
-    [];
-
-  const groups =
-    payload?.groups ??
-    payload?.component_groups ??
-    payload?.componentGroups ??
-    payload?.data?.groups ??
-    payload?.data?.component_groups ??
-    [];
-
-  if (Array.isArray(groups)) {
-    for (const rawGroup of groups) {
-      const group = toComponent(rawGroup, position++, null, true);
-      if (!group) continue;
-      components.push(group);
-
-      const children = rawGroup.components ?? rawGroup.children ?? rawGroup.items ?? [];
-      if (Array.isArray(children)) {
-        for (const rawChild of children) {
-          const child = toComponent(rawChild, position++, group.id, false);
-          if (child) components.push(child);
-        }
-      }
-    }
-  }
-
-  if (Array.isArray(directComponents)) {
-    for (const rawComponent of directComponents) {
-      const isGroup = rawComponent?.group === true || rawComponent?.is_group === true || rawComponent?.isGroup === true;
-      const groupId = rawComponent?.group_id ?? rawComponent?.groupId ?? rawComponent?.parent_id ?? rawComponent?.parentId ?? null;
-      const component = toComponent(rawComponent, position++, groupId ? String(groupId) : null, isGroup);
-      if (component && !components.some((existing) => existing.id === component.id)) {
-        components.push(component);
-      }
-    }
-  }
-
-  return components.sort((a, b) => a.position - b.position);
-}
-
 function getBaseUrl(configUrl) {
   try {
     return new URL('/', configUrl).toString();
@@ -155,13 +69,11 @@ export async function GET() {
       );
     }
 
-    const components = normalizeConfig(payload);
-
-    if (!components.length) {
+    if (!payload || typeof payload !== 'object' || !Array.isArray(payload.components)) {
       return Response.json(
         {
           ok: false,
-          error: 'O config.json respondeu, mas não foi possível identificar grupos ou serviços no payload.',
+          error: 'O config.json respondeu, mas o atributo components não está no formato esperado.',
           source: 'datadog-config-json',
           contentType,
           finalUrl: response.url,
@@ -171,13 +83,15 @@ export async function GET() {
       );
     }
 
+    // O config.json é a fonte única de verdade. Mantemos sua estrutura original,
+    // incluindo ComponentGroup -> components, logo, favicon e metadados da página.
     return Response.json(
       {
+        ...payload,
         ok: true,
         source: 'datadog-config-json',
         sourceUrl: DATADOG_STATUS_PAGE_URL,
         finalUrl: response.url,
-        components,
         fetchedAt: new Date().toISOString(),
       },
       {
