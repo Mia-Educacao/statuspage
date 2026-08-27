@@ -86,6 +86,14 @@ function normalizeConfig(payload) {
   return components.sort((a, b) => a.position - b.position);
 }
 
+function getBaseUrl(configUrl) {
+  try {
+    return new URL('/', configUrl).toString();
+  } catch {
+    return undefined;
+  }
+}
+
 export async function GET() {
   if (!DATADOG_STATUS_PAGE_URL) {
     return Response.json(
@@ -98,29 +106,55 @@ export async function GET() {
   }
 
   try {
+    const baseUrl = getBaseUrl(DATADOG_STATUS_PAGE_URL);
     const response = await fetch(DATADOG_STATUS_PAGE_URL, {
       cache: 'no-store',
       redirect: 'follow',
       headers: {
-        Accept: 'application/json',
+        Accept: '*/*',
         'Cache-Control': 'no-cache',
         Pragma: 'no-cache',
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36',
+        'User-Agent': 'curl/8.7.1',
+        ...(baseUrl ? { Referer: baseUrl } : {}),
       },
     });
+
+    const contentType = response.headers.get('content-type') ?? '';
+    const body = await response.text();
 
     if (!response.ok) {
       return Response.json(
         {
           ok: false,
           error: `Datadog respondeu com status ${response.status}`,
+          status: response.status,
+          contentType,
+          finalUrl: response.url,
+          bodyPreview: body.slice(0, 180),
         },
         { status: 502 },
       );
     }
 
-    const payload = await response.json();
+    let payload;
+    try {
+      payload = JSON.parse(body);
+    } catch {
+      const looksLikeHtml = /^\s*<!doctype html|^\s*<html/i.test(body);
+      return Response.json(
+        {
+          ok: false,
+          error: looksLikeHtml
+            ? 'O Datadog retornou HTML em vez de JSON para config.json.'
+            : 'A resposta do Datadog não é um JSON válido.',
+          contentType,
+          finalUrl: response.url,
+          bodyPreview: body.slice(0, 180),
+        },
+        { status: 502 },
+      );
+    }
+
     const components = normalizeConfig(payload);
 
     if (!components.length) {
@@ -129,6 +163,9 @@ export async function GET() {
           ok: false,
           error: 'O config.json respondeu, mas não foi possível identificar grupos ou serviços no payload.',
           source: 'datadog-config-json',
+          contentType,
+          finalUrl: response.url,
+          payloadKeys: payload && typeof payload === 'object' ? Object.keys(payload).slice(0, 30) : [],
         },
         { status: 502 },
       );
@@ -139,6 +176,7 @@ export async function GET() {
         ok: true,
         source: 'datadog-config-json',
         sourceUrl: DATADOG_STATUS_PAGE_URL,
+        finalUrl: response.url,
         components,
         fetchedAt: new Date().toISOString(),
       },
