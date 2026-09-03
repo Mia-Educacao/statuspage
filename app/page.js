@@ -1,53 +1,93 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  buildComponentIndex,
+  calculateAvailability,
+  getActiveIncidents,
+  getGroupStatus,
+  getStatusMeta,
+  isComponentGroup,
+  resolveIncidentImpact,
+  sortByPosition,
+} from '../lib/status';
 
-const STATUS_META = {
-  operational: { label: 'Operacional', className: 'ok', weight: 0 },
-  degraded: { label: 'Desempenho degradado', className: 'warning', weight: 1 },
-  degraded_performance: { label: 'Desempenho degradado', className: 'warning', weight: 1 },
-  partial_outage: { label: 'Indisponibilidade parcial', className: 'warning', weight: 2 },
-  major_outage: { label: 'Indisponível', className: 'danger', weight: 3 },
-  under_maintenance: { label: 'Em manutenção', className: 'maintenance', weight: 1 },
-  maintenance: { label: 'Em manutenção', className: 'maintenance', weight: 1 },
-};
+const REFRESH_INTERVAL_MS = 60_000;
 
-function getStatusMeta(status) {
-  return STATUS_META[status] ?? { label: status || 'Desconhecido', className: 'neutral', weight: 0 };
+function IncidentCard({ incident, componentIndex }) {
+  const impact = resolveIncidentImpact(incident, componentIndex);
+  const hasRelationship = impact.modules.length > 0 || impact.components.length > 0;
+
+  return (
+    <article className="incident-card">
+      <div className="incident-content">
+        <strong className="incident-title">{incident.title || 'Incidente em andamento'}</strong>
+        {incident.description && <p className="incident-description">{incident.description}</p>}
+
+        {hasRelationship && (
+          <div className="incident-impact">
+            {impact.modules.length > 0 && (
+              <span>
+                <strong>Módulos afetados:</strong> {impact.modules.join(', ')}
+              </span>
+            )}
+            {impact.components.length > 0 && (
+              <span>
+                <strong>Serviços relacionados:</strong> {impact.components.join(', ')}
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+    </article>
+  );
 }
 
-function sortByPosition(items = []) {
-  return [...items].sort((a, b) => Number(a?.position ?? 0) - Number(b?.position ?? 0));
-}
+function ServiceGroup({ group }) {
+  const grouped = isComponentGroup(group);
+  const groupStatus = grouped ? getGroupStatus(group) : group.status;
+  const groupMeta = getStatusMeta(groupStatus);
+  const children = grouped ? sortByPosition(group.components) : [group];
 
-function getGroupStatus(group) {
-  const children = Array.isArray(group?.components) ? group.components : [];
-  if (!children.length) return 'operational';
+  return (
+    <article className="service-group">
+      <header className="group-header">
+        <div>
+          <h3>{group.name}</h3>
+          {grouped && (
+            <span className="component-count">
+              {children.length} {children.length === 1 ? 'serviço monitorado' : 'serviços monitorados'}
+            </span>
+          )}
+        </div>
+        <span className={`status-chip ${groupMeta.className}`}>{groupMeta.label}</span>
+      </header>
 
-  return children.reduce((worst, component) => {
-    const current = getStatusMeta(component.status);
-    const previous = getStatusMeta(worst);
-    return current.weight > previous.weight ? component.status : worst;
-  }, 'operational');
-}
-
-function collectLeafComponents(groups = []) {
-  return groups.flatMap((group) => {
-    if (group?.type === 'ComponentGroup' && Array.isArray(group.components)) {
-      return group.components;
-    }
-    return group ? [group] : [];
-  });
+      <div className="service-list">
+        {children.map((component) => {
+          const meta = getStatusMeta(component.status);
+          return (
+            <div className="service-row" key={component.id}>
+              <div className="service-name">
+                <span className={`status-dot ${meta.className}`} aria-hidden="true" />
+                {component.name}
+              </div>
+              <span className={`status-text ${meta.className}`}>{meta.label}</span>
+            </div>
+          );
+        })}
+      </div>
+    </article>
+  );
 }
 
 export default function Home() {
-  const [data, setData] = useState({ components: [], fetchedAt: null });
+  const [data, setData] = useState({ components: [], incidents: [] });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
   const loadStatus = useCallback(async () => {
     try {
-      setError('');
       const response = await fetch('/api/status', { cache: 'no-store' });
       const payload = await response.json();
 
@@ -56,8 +96,13 @@ export default function Home() {
       }
 
       setData(payload);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Falha ao atualizar os serviços.');
+      setError('');
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : 'Falha ao atualizar os serviços.',
+      );
     } finally {
       setLoading(false);
     }
@@ -65,8 +110,8 @@ export default function Home() {
 
   useEffect(() => {
     loadStatus();
-    const refresh = setInterval(loadStatus, 60_000);
-    return () => clearInterval(refresh);
+    const refreshTimer = window.setInterval(loadStatus, REFRESH_INTERVAL_MS);
+    return () => window.clearInterval(refreshTimer);
   }, [loadStatus]);
 
   useEffect(() => {
@@ -80,18 +125,16 @@ export default function Home() {
       favicon.href = data.favicon;
     }
 
-    if (data.name) {
-      document.title = `${data.name} | iônica`;
-    }
+    if (data.name) document.title = `${data.name} | iônica`;
   }, [data.favicon, data.name]);
 
-  const groups = useMemo(() => sortByPosition(data.components ?? []), [data.components]);
-  const leafComponents = useMemo(() => collectLeafComponents(groups), [groups]);
-  const operationalCount = leafComponents.filter((component) => component.status === 'operational').length;
-  const availability = leafComponents.length
-    ? Math.floor((operationalCount / leafComponents.length) * 10000) / 100
-    : 100;
-  const allOperational = leafComponents.length > 0 && operationalCount === leafComponents.length;
+  const groups = useMemo(() => sortByPosition(data.components), [data.components]);
+  const componentIndex = useMemo(() => buildComponentIndex(groups), [groups]);
+  const activeIncidents = useMemo(() => getActiveIncidents(data.incidents), [data.incidents]);
+  const { availability, allOperational } = useMemo(
+    () => calculateAvailability(groups),
+    [groups],
+  );
 
   return (
     <main className="page-shell">
@@ -105,11 +148,15 @@ export default function Home() {
         </div>
       </header>
 
-      <section className="status-band">
+      <section className="status-band" aria-live="polite">
         <div className={`status-card ${allOperational ? 'status-card-ok' : 'status-card-alert'}`}>
           <div className="status-copy">
             <span className="eyebrow">DISPONIBILIDADE EM TEMPO REAL</span>
-            <h1>{loading ? 'Atualizando...' : `${availability.toFixed(2).replace('.', ',')}% disponível agora`}</h1>
+            <h1>
+              {loading
+                ? 'Atualizando...'
+                : `${availability.toFixed(2).replace('.', ',')}% disponível agora`}
+            </h1>
             <p>
               {loading
                 ? 'Estou conferindo o estado atual dos serviços para você.'
@@ -118,55 +165,52 @@ export default function Home() {
                   : 'Identifiquei impacto em um ou mais serviços. Veja abaixo onde está a indisponibilidade.'}
             </p>
           </div>
-          <div className="live-pill"><span className="pulse" /> Monitoramento ativo</div>
-        </div>
-      </section>
-
-      <section className="services-section">
-        <div className="section-heading">
-          <div>
-            <span className="eyebrow dark">STATUS DOS SERVIÇOS</span>
-            <h2>Status dos serviços</h2>
-            <p className="section-description">
-              Acompanhe o funcionamento dos ambientes e recursos da iônica neste momento.
-            </p>
+          <div className="live-pill">
+            <span className="pulse" aria-hidden="true" /> Monitoramento ativo
           </div>
-          <span className="source-label">Organização sincronizada com o Datadog</span>
         </div>
-
-        {error && <div className="error-card">{error}</div>}
-
-        {!loading && !error && groups.map((group) => {
-          const isGroup = group.type === 'ComponentGroup' || Array.isArray(group.components);
-          const groupStatus = isGroup ? getGroupStatus(group) : group.status;
-          const groupMeta = getStatusMeta(groupStatus);
-          const children = isGroup ? sortByPosition(group.components ?? []) : [];
-
-          return (
-            <article className="service-group" key={group.id}>
-              <header className="group-header">
-                <div>
-                  <h3>{group.name}</h3>
-                  {isGroup && <span className="component-count">{children.length} {children.length === 1 ? 'serviço monitorado' : 'serviços monitorados'}</span>}
-                </div>
-                <span className={`status-chip ${groupMeta.className}`}>{groupMeta.label}</span>
-              </header>
-
-              <div className="service-list">
-                {(isGroup ? children : [group]).map((component) => {
-                  const meta = getStatusMeta(component.status);
-                  return (
-                    <div className="service-row" key={component.id}>
-                      <div className="service-name"><span className={`status-dot ${meta.className}`} />{component.name}</div>
-                      <span className={`status-text ${meta.className}`}>{meta.label}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            </article>
-          );
-        })}
       </section>
+
+      <div className="content-shell">
+        {error && <div className="error-card" role="alert">{error}</div>}
+
+        {activeIncidents.length > 0 && (
+          <section className="incidents-section" aria-labelledby="incidents-title">
+            <div className="incidents-heading">
+              <span className="eyebrow dark">INCIDENTES EM ANDAMENTO</span>
+              <h2 id="incidents-title">
+                {activeIncidents.length === 1 ? 'Incidente identificado' : 'Incidentes identificados'}
+              </h2>
+            </div>
+            <div className="incidents-list">
+              {activeIncidents.map((incident) => (
+                <IncidentCard
+                  key={incident.id ?? `${incident.title}-${incident.publishedDate}`}
+                  incident={incident}
+                  componentIndex={componentIndex}
+                />
+              ))}
+            </div>
+          </section>
+        )}
+
+        <section className="services-section">
+          <div className="section-heading">
+            <div>
+              <span className="eyebrow dark">STATUS DOS SERVIÇOS</span>
+              <h2>Status dos serviços</h2>
+              <p className="section-description">
+                Acompanhe o funcionamento dos ambientes e recursos da iônica neste momento.
+              </p>
+            </div>
+            <span className="source-label">Organização sincronizada com o Datadog</span>
+          </div>
+
+          {!loading && groups.map((group) => (
+            <ServiceGroup key={group.id} group={group} />
+          ))}
+        </section>
+      </div>
     </main>
   );
 }
