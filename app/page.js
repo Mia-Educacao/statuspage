@@ -44,7 +44,6 @@ export default function Home() {
   const [data, setData] = useState({ components: [], fetchedAt: null });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [secondsAgo, setSecondsAgo] = useState(0);
 
   const loadStatus = useCallback(async () => {
     try {
@@ -57,7 +56,6 @@ export default function Home() {
       }
 
       setData(payload);
-      setSecondsAgo(0);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Falha ao atualizar os serviços.');
     } finally {
@@ -70,11 +68,6 @@ export default function Home() {
     const refresh = setInterval(loadStatus, 60_000);
     return () => clearInterval(refresh);
   }, [loadStatus]);
-
-  useEffect(() => {
-    const timer = setInterval(() => setSecondsAgo((value) => value + 1), 1_000);
-    return () => clearInterval(timer);
-  }, []);
 
   useEffect(() => {
     if (data.favicon) {
@@ -102,18 +95,19 @@ export default function Home() {
 
   return (
     <main className="page-shell">
-      <section className="hero">
-        <div className="brand-row">
+      <header className="topbar">
+        <div className="topbar-inner">
           {data.companyLogoThumbnail ? (
             <img src={data.companyLogoThumbnail} alt="iônica" className="brand-logo" />
           ) : (
             <div className="brand-placeholder">iônica</div>
           )}
-          <div className="brand-tag">status</div>
         </div>
+      </header>
 
-        <div className={`hero-status ${allOperational ? 'hero-ok' : 'hero-alert'}`}>
-          <div className="hero-copy">
+      <section className="status-band">
+        <div className={`status-card ${allOperational ? 'status-card-ok' : 'status-card-alert'}`}>
+          <div className="status-copy">
             <span className="eyebrow">DISPONIBILIDADE EM TEMPO REAL</span>
             <h1>{loading ? 'Atualizando...' : `${availability.toFixed(2).replace('.', ',')}% disponível agora`}</h1>
             <p>
@@ -126,19 +120,13 @@ export default function Home() {
           </div>
           <div className="live-pill"><span className="pulse" /> Monitoramento ativo</div>
         </div>
-
-        <div className="update-row">
-          <span>Atualização automática a cada 60 segundos</span>
-          <span>{data.fetchedAt ? `Atualizado há ${secondsAgo}s` : 'Aguardando primeira atualização'}</span>
-          <button onClick={loadStatus} type="button">Atualizar agora</button>
-        </div>
       </section>
 
       <section className="services-section">
         <div className="section-heading">
           <div>
             <span className="eyebrow dark">STATUS DOS SERVIÇOS</span>
-            <h2>{data.name || 'Serviços monitorados'}</h2>
+            <h2>Status dos serviços</h2>
             <p className="section-description">
               Acompanhe o funcionamento dos ambientes e recursos da iônica neste momento.
             </p>
@@ -164,26 +152,17 @@ export default function Home() {
                 <span className={`status-chip ${groupMeta.className}`}>{groupMeta.label}</span>
               </header>
 
-              {isGroup ? (
-                <div className="service-list">
-                  {children.map((component) => {
-                    const meta = getStatusMeta(component.status);
-                    return (
-                      <div className="service-row" key={component.id}>
-                        <div className="service-name"><span className={`status-dot ${meta.className}`} />{component.name}</div>
-                        <span className={`status-text ${meta.className}`}>{meta.label}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div className="service-list">
-                  <div className="service-row">
-                    <div className="service-name"><span className={`status-dot ${groupMeta.className}`} />{group.name}</div>
-                    <span className={`status-text ${groupMeta.className}`}>{groupMeta.label}</span>
-                  </div>
-                </div>
-              )}
+              <div className="service-list">
+                {(isGroup ? children : [group]).map((component) => {
+                  const meta = getStatusMeta(component.status);
+                  return (
+                    <div className="service-row" key={component.id}>
+                      <div className="service-name"><span className={`status-dot ${meta.className}`} />{component.name}</div>
+                      <span className={`status-text ${meta.className}`}>{meta.label}</span>
+                    </div>
+                  );
+                })}
+              </div>
             </article>
           );
         })}
