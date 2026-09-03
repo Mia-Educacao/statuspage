@@ -27,14 +27,14 @@ function IncidentCard({ incident, componentIndex }) {
         {hasRelationship && (
           <div className="incident-impact">
             {impact.modules.length > 0 && (
-              <span>
+              <div>
                 <strong>Módulos afetados:</strong> {impact.modules.join(', ')}
-              </span>
+              </div>
             )}
             {impact.components.length > 0 && (
-              <span>
+              <div>
                 <strong>Serviços relacionados:</strong> {impact.components.join(', ')}
-              </span>
+              </div>
             )}
           </div>
         )}
