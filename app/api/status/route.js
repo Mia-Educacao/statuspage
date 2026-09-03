@@ -1,112 +1,106 @@
-const DATADOG_STATUS_PAGE_URL = process.env.DATADOG_STATUS_PAGE_URL;
+const REQUEST_TIMEOUT_MS = 10_000;
+const CACHE_MAX_AGE_SECONDS = 55;
 
-function getBaseUrl(configUrl) {
+export const dynamic = 'force-dynamic';
+
+function getConfiguredUrl() {
+  const value = process.env.DATADOG_STATUS_PAGE_URL;
+  if (!value) return null;
+
   try {
-    return new URL('/', configUrl).toString();
+    return new URL(value);
   } catch {
-    return undefined;
+    return null;
   }
 }
 
+function buildHeaders(configUrl) {
+  return {
+    Accept: 'application/json, text/plain;q=0.9, */*;q=0.8',
+    'Cache-Control': 'no-cache',
+    Pragma: 'no-cache',
+    'User-Agent': 'IonicaStatusPage/1.0',
+    Referer: new URL('/', configUrl).toString(),
+  };
+}
+
+function upstreamError(message, status = 502) {
+  return Response.json({ ok: false, error: message }, { status });
+}
+
 export async function GET() {
-  if (!DATADOG_STATUS_PAGE_URL) {
-    return Response.json(
-      {
-        ok: false,
-        error: 'Variável de ambiente DATADOG_STATUS_PAGE_URL não configurada.',
-      },
-      { status: 500 },
+  const configUrl = getConfiguredUrl();
+
+  if (!configUrl) {
+    return upstreamError(
+      'Variável de ambiente DATADOG_STATUS_PAGE_URL ausente ou inválida.',
+      500,
     );
   }
 
   try {
-    const baseUrl = getBaseUrl(DATADOG_STATUS_PAGE_URL);
-    const response = await fetch(DATADOG_STATUS_PAGE_URL, {
+    const response = await fetch(configUrl, {
       cache: 'no-store',
       redirect: 'follow',
-      headers: {
-        Accept: '*/*',
-        'Cache-Control': 'no-cache',
-        Pragma: 'no-cache',
-        'User-Agent': 'curl/8.7.1',
-        ...(baseUrl ? { Referer: baseUrl } : {}),
-      },
+      headers: buildHeaders(configUrl),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
 
-    const contentType = response.headers.get('content-type') ?? '';
-    const body = await response.text();
-
     if (!response.ok) {
-      return Response.json(
-        {
-          ok: false,
-          error: `Datadog respondeu com status ${response.status}`,
-          status: response.status,
-          contentType,
-          finalUrl: response.url,
-          bodyPreview: body.slice(0, 180),
-        },
-        { status: 502 },
-      );
+      console.error('Datadog status page request failed', {
+        status: response.status,
+        finalUrl: response.url,
+      });
+      return upstreamError(`Datadog respondeu com status ${response.status}.`);
     }
 
+    const body = await response.text();
     let payload;
+
     try {
       payload = JSON.parse(body);
-    } catch {
-      const looksLikeHtml = /^\s*<!doctype html|^\s*<html/i.test(body);
-      return Response.json(
-        {
-          ok: false,
-          error: looksLikeHtml
-            ? 'O Datadog retornou HTML em vez de JSON para config.json.'
-            : 'A resposta do Datadog não é um JSON válido.',
-          contentType,
-          finalUrl: response.url,
-          bodyPreview: body.slice(0, 180),
-        },
-        { status: 502 },
-      );
+    } catch (error) {
+      console.error('Datadog status page returned invalid JSON', {
+        contentType: response.headers.get('content-type'),
+        finalUrl: response.url,
+        error,
+      });
+      return upstreamError('A resposta da página de status não é um JSON válido.');
     }
 
     if (!payload || typeof payload !== 'object' || !Array.isArray(payload.components)) {
-      return Response.json(
-        {
-          ok: false,
-          error: 'O config.json respondeu, mas o atributo components não está no formato esperado.',
-          source: 'datadog-config-json',
-          contentType,
-          finalUrl: response.url,
-          payloadKeys: payload && typeof payload === 'object' ? Object.keys(payload).slice(0, 30) : [],
-        },
-        { status: 502 },
+      console.error('Unexpected Datadog status page schema', {
+        finalUrl: response.url,
+        payloadKeys: payload && typeof payload === 'object' ? Object.keys(payload) : [],
+      });
+      return upstreamError(
+        'A página de status respondeu em um formato diferente do esperado.',
       );
     }
 
-    // O config.json é a fonte única de verdade. Mantemos sua estrutura original,
-    // incluindo ComponentGroup -> components, logo, favicon e metadados da página.
     return Response.json(
       {
         ...payload,
+        incidents: Array.isArray(payload.incidents) ? payload.incidents : [],
         ok: true,
         source: 'datadog-config-json',
-        sourceUrl: DATADOG_STATUS_PAGE_URL,
-        finalUrl: response.url,
         fetchedAt: new Date().toISOString(),
       },
       {
         headers: {
-          'Cache-Control': 'public, s-maxage=55, stale-while-revalidate=5',
+          'Cache-Control': `public, s-maxage=${CACHE_MAX_AGE_SECONDS}, stale-while-revalidate=5`,
         },
       },
     );
   } catch (error) {
-    return Response.json(
-      {
-        ok: false,
-        error: error instanceof Error ? error.message : 'Erro inesperado ao consultar o config.json do Datadog',
-      },
-      { status: 502 },
+    const isTimeout = error?.name === 'TimeoutError';
+
+    console.error('Datadog status page request error', error);
+
+    return upstreamError(
+      isTimeout
+        ? 'A consulta à página de status excedeu o tempo limite.'
+        : 'Não foi possível consultar a página de status neste momento.',
     );
   }
 }
