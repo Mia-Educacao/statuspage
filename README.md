@@ -7,9 +7,17 @@ Página pública de status da iônica, com identidade visual própria e organiza
 - Next.js
 - Front-end consulta apenas `/api/status`
 - `/api/status` acessa o `config.json` da Status Page no backend
-- A resposta é normalizada server-side para o modelo usado pela interface
+- O `config.json` é a fonte única de verdade para logo, favicon, componentes, agrupamentos, status e incidentes
+- A hierarquia `ComponentGroup -> components` é preservada
 - Atualização automática a cada 60 segundos
-- Sem histórico de incidentes ou disponibilidade passada
+- Sem histórico de disponibilidade passada
+
+### Separação de responsabilidades
+
+- `app/api/status/route.js`: integração server-side com o Datadog, validação da resposta e tratamento de falhas
+- `lib/status.js`: regras puras de domínio, como status do agrupamento, disponibilidade e relacionamento de incidentes
+- `app/page.js`: estado da interface, atualização periódica e renderização
+- `app/styles.css`: apresentação visual responsiva
 
 ## Configuração
 
@@ -27,23 +35,42 @@ DATADOG_STATUS_PAGE_URL=https://status-servicos.statuspage.datadoghq.com/config.
 
 A URL não fica hardcoded no código.
 
-## Fonte de dados atual
+## Fonte de dados
 
-O backend executa uma requisição equivalente a:
+O backend executa uma requisição server-side para a URL configurada em `DATADOG_STATUS_PAGE_URL`.
 
-```bash
-curl --location 'https://status-servicos.statuspage.datadoghq.com/config.json'
-```
-
-O navegador não acessa o Datadog diretamente. A interface consome apenas o endpoint interno:
+O navegador não acessa o Datadog diretamente. A interface consome apenas:
 
 ```text
 GET /api/status
 ```
 
-O backend lê `DATADOG_STATUS_PAGE_URL`, consulta o JSON e normaliza grupos, serviços, ordem e status para a estrutura usada pela página.
+O endpoint preserva o payload do `config.json` e acrescenta somente metadados internos de leitura, como `ok`, `source` e `fetchedAt`.
 
-Essa estratégia substitui temporariamente o endpoint `/api/v2/components.json`, que estava retornando HTTP 403.
+## Incidentes
+
+O nó `incidents` é usado para exibir incidentes ativos entre o quadro de disponibilidade e a lista de serviços.
+
+Um incidente é considerado ativo quando não está marcado como resolvido. Para cada incidente, a interface apresenta:
+
+- `title` em destaque
+- `description`
+- módulos afetados, quando os IDs de `componentsAffected` pertencem a um `ComponentGroup`
+- serviços relacionados
+
+O relacionamento é feito por ID. Não existem associações de módulos hardcoded na interface.
+
+Incidentes resolvidos não são apresentados na página atual.
+
+## Status dos agrupamentos
+
+O status de um `ComponentGroup` é derivado do componente filho com maior impacto. A ordem de severidade utilizada é:
+
+1. `major_outage`
+2. `partial_outage`
+3. `degraded` / `degraded_performance`
+4. `maintenance` / `under_maintenance`
+5. `operational`
 
 ## Executar localmente
 
@@ -59,7 +86,7 @@ Acesse `http://localhost:3000`.
 
 1. Importe o repositório `Mia-Educacao/statuspage` na Vercel.
 2. Framework preset: Next.js.
-3. Configure a variável `DATADOG_STATUS_PAGE_URL` em **Settings > Environment Variables**.
+3. Configure `DATADOG_STATUS_PAGE_URL` em **Settings > Environment Variables**.
 4. Valor atual:
 
 ```text
@@ -80,15 +107,15 @@ Next.js server-side
   ↓
 DATADOG_STATUS_PAGE_URL
   ↓
-GET .../config.json
+config.json
   ↓
-Normalização do JSON
+Validação e preservação do payload
   ↓
-JSON com grupos + serviços + status
+UI + regras de domínio em lib/status.js
   ↓
-Renderização da página iônica
+Disponibilidade + incidentes + agrupamentos + componentes
 ```
 
-## Observação
+## Resiliência
 
-O normalizador aceita algumas variações comuns de estrutura (`components`, `groups`, `component_groups` e equivalentes). Caso o schema efetivo do `config.json` seja diferente, o endpoint retorna um erro explícito em vez de assumir dados inexistentes.
+A integração possui timeout, validação HTTP, validação de JSON e validação mínima do schema. Detalhes técnicos da resposta upstream são registrados no servidor, evitando expor conteúdo de diagnóstico desnecessário para o navegador.
